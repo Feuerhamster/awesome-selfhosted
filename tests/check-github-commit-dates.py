@@ -20,11 +20,12 @@ Usage:
 
 """
 
-from github import Github
 import sys
 import time
 import re
 import os
+import requests
+from datetime import *
 
 __author__ = "nodiscc"
 __copyright__ = "Copyright 2019, nodiscc"
@@ -39,22 +40,72 @@ __status__ = "Production"
 
 access_token = os.environ['GITHUB_TOKEN']
 
-""" find all URLs of the form https://github.com/owner/repo """
-with open('README.md', 'r') as readme:
-    data = readme.read()
-    project_urls = re.findall('https://github.com/[A-z]*/[A-z|0-9|\-|_|\.]+', data)
 
+headers = {"Authorization": "Bearer " + access_token}
+
+def run_query(query, variables):
+    request = requests.post('https://api.github.com/graphql', json={'query': query, 'variables': variables}, headers=headers)
+    if request.status_code == 200:
+        return request.json()
+    else:
+        raise Exception("Query failed to run by returning code of {}. {}".format(request.status_code, query))
+
+query = '''
+    query($owner: String!, $name: String!)
+        {
+            repository(owner:$owner, name:$name) {
+            pushedAt
+        }
+    }'''
+
+""" find all URLs of the form https://github.com/owner/repo """
+with open(sys.argv[1], 'r') as readme:
+    print('Testing ' + sys.argv[1])
+    data = readme.read()
+    #project_urls = re.findall('https://github\.com/.*', data)
+    project_urls = re.findall('https://github\.com/([a-zA-Z\d\-\._]{1,39}/[a-zA-Z\d\-\._]{1,39})(?=\)|/|#\s)', data)
+    print('Checking ' + str(len(project_urls)) + ' github repos.')
 urls = sorted(set(project_urls))
+
 
 """ Uncomment this to debug the list of matched URLs """
 # print(str(urls))
+# print(len(urls))
+# with open('links.txt', 'w') as filehandle:
+#     for l in urls:
+#         filehandle.write('%s\n' % l)
+
 # exit(0)
 
-""" login to github API """
-g = Github(access_token)
-
+list = []
+i = 0
 """ load project metadata, output last commit date and URL """
 for url in urls:
-    project = re.sub('https://github.com/', '', url)
-    repo = g.get_repo(project)
-    print(str(repo.pushed_at) + ' https://github.com/' + project)
+    split = url.split("/")
+    o = 'sapioit'
+    p = "URL-Shortener"
+    variables = {
+        "owner": split[0],
+        "name": split[1]
+    }
+    r = run_query(query, variables)
+    if r["data"]["repository"] is None:
+        list.append('[] | Repo Does not Exist | https://github.com/'+url)
+        print('Repo Does not Exist | https://github.com/'+url)
+        i += 1
+    else:
+        r_date = datetime.strptime(r["data"]["repository"]["pushedAt"], '%Y-%m-%dT%H:%M:%SZ').date()
+        if r_date < (date.today() - timedelta(days = 365)):
+            list.append([r_date, 'https://github.com/'+url])
+            print(str(r_date)+' | https://github.com/'+url)
+            i += 1
+
+if i > 0:
+    sorted_list = sorted(list, key=lambda x: x[0])
+    with open('github_commit_dates.md', 'w') as filehandle:
+        filehandle.write('%s\n' % '###There were %s repos last updated over 1 year ago.' % str(i))
+        filehandle.write('%s\n' % '| Date | Github Repo |')
+        filehandle.write('%s\n' % '|---|---|')
+        for l in sorted_list:
+            filehandle.write('| %s | %s |\n' % (str(l[0]), l[1]))
+    sys.exit(0)
